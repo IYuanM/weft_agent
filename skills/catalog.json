@@ -1,0 +1,4 @@
+[
+  {"name": "code-documentation", "description": "读取工作区内代码，为脚本或小型项目生成 README、API 参数说明和使用示例。"},
+  {"name": "newsletter-generation", "description": "根据工作区内用户提供的材料，整理带来源标注的 Markdown 简报或周报；不进行联网新闻检索。"}
+]
