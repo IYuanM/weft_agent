@@ -68,10 +68,13 @@ def main():
     executor = ToolExecutor(registry, admission=Admission(args.tool_capacity), max_parallel=args.tool_concurrency)
     agent = Agent(model, executor, Store(args.state_dir), max_steps=args.max_steps, max_seconds=args.max_seconds,
                   context_policy=ContextPolicy(window_tokens=args.context_window, keep_blocks=args.context_keep_blocks),
-                  loop_policy=LoopPolicy(repetitions=args.loop_repetitions), skills=skills)
+                  loop_policy=LoopPolicy(repetitions=args.loop_repetitions), skills=skills,
+                  workspace=str(tools.root))
     result = agent.run(args.message, thread_id=args.thread,
                        observer=lambda event: print(json.dumps(event, ensure_ascii=False), flush=True))
-    print(f"\nstatus={result.status}  thread={result.thread_id}\nevents={result.event_path}")
+    print(f"\nstatus={result.status}  thread={result.thread_id}\n"
+          f"task={result.task_id}  run={result.run_id}  attempt={result.attempt_id}\n"
+          f"events={result.event_path}")
     return 0 if result.status == "completed" else 1
 
 

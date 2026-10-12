@@ -4,6 +4,7 @@ import json
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from weft.storage.migrations import CONVERSATION_MIGRATIONS, migrate
 
 
 class Store:
@@ -11,9 +12,7 @@ class Store:
         self.root = root
         (root / "runs").mkdir(parents=True, exist_ok=True)
         self.db = root / "threads.sqlite3"
-        with closing(sqlite3.connect(self.db)) as conn, conn:
-            conn.execute("CREATE TABLE IF NOT EXISTS threads (id TEXT PRIMARY KEY, messages TEXT NOT NULL)")
-            conn.execute("CREATE TABLE IF NOT EXISTS contexts (id TEXT PRIMARY KEY, state TEXT NOT NULL)")
+        migrate(self.db, CONVERSATION_MIGRATIONS)
 
     def load(self, thread_id: str) -> list[dict]:
         with closing(sqlite3.connect(self.db)) as conn, conn:

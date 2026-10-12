@@ -4,15 +4,18 @@ import asyncio
 import json
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from threading import Event
+from weft import __version__
 
 from ..models.chat import ModelError
 from ..observability.events import Events
-from ..persistence.store import Store
+from weft.domain import RunState, TaskSpec
+from weft.storage.contracts import ConversationRepository, ExecutionRepository
+from weft.storage.sqlite import SQLiteExecutionRepository
 from .run_context import RunContext
 from ..tools.executor import ToolExecutor
-from ..tools.concurrency import run_sync, WorkerInterrupted
+from ..tools.concurrency import drain, run_sync, WorkerInterrupted
 from ..context.manager import ContextManager, ContextPolicy, ContextLimit, estimate_tokens
 from ..safety.loops import LoopDetector, LoopPolicy, WARNING
 
@@ -31,13 +34,16 @@ class Result:
     status: str
     answer: str
     event_path: str
+    task_id: str = ""
+    attempt_id: str = ""
 
 
 class Agent:
-    def __init__(self, model, executor: ToolExecutor, store: Store, *, max_steps=8,
+    def __init__(self, model, executor: ToolExecutor, store: ConversationRepository, *, max_steps=8,
                  max_seconds=120.0, request_timeout=30.0, max_context_chars=100_000,
                  context_policy: ContextPolicy | None = None, loop_policy: LoopPolicy | None = None,
-                 summary_model=None, skills=None):
+                 summary_model=None, skills=None, executions: ExecutionRepository | None = None,
+                 workspace: str = "unspecified"):
         if max_steps < 1 or min(max_seconds, request_timeout, max_context_chars) <= 0:
             raise ValueError("Limits must be positive")
         self.model, self.executor, self.store = model, executor, store
@@ -47,15 +53,60 @@ class Agent:
         self.loop_policy = loop_policy or LoopPolicy()
         self.summary_model = summary_model or model
         self.skills = skills
+        self.executions = executions if executions is not None else SQLiteExecutionRepository(store.root)
+        self.workspace = workspace
 
     async def arun(self, text: str, *, thread_id="default", cancel: Event | None = None, observer=None) -> Result:
         if not text.strip():
             raise ValueError("Message cannot be empty")
-        run_id = uuid.uuid4().hex
-        events = Events(self.store, thread_id, run_id, observer)
+        # Module 1 records lifecycle, not resumable steps. Every CLI call is a new task.
+        spec = TaskSpec(text, self.workspace, configuration={
+            "runtime_version": __version__,
+            "model": self.model.name, "max_steps": self.max_steps, "max_seconds": self.max_seconds,
+            "request_timeout": self.request_timeout, "max_context_chars": self.max_context_chars,
+            "context_policy": asdict(self.context_policy), "loop_policy": asdict(self.loop_policy),
+            "tools": self.executor.registry.schemas(),
+        })
+        def open_execution():
+            submission = self.executions.submit(thread_id, spec)
+            run, attempt = self.executions.start_attempt(submission.run.run_id, submission.run.version,
+                                                         "embedded:" + uuid.uuid4().hex)
+            return submission, run, attempt
+
+        opening = asyncio.create_task(asyncio.to_thread(open_execution))
+        try:
+            submission, run, attempt = await asyncio.shield(opening)
+        except asyncio.CancelledError:
+            # A database commit may finish after cancellation of its awaiting coroutine.
+            # Recover the committed identities and close the attempt before propagating.
+            await drain(opening)
+            if not opening.cancelled() and opening.exception() is None:
+                _, run, attempt = opening.result()
+                await run_sync(self.executions.transition, run.run_id, run.version, RunState.CANCELLED,
+                               attempt_id=attempt.attempt_id, reason="cancelled_during_start")
+            raise
+        outcome, reason = RunState.FAILED, "unhandled_exception"
+        try:
+            result = await self._arun(text, thread_id=thread_id, run_id=run.run_id,
+                                     task_id=submission.task.task_id, attempt_id=attempt.attempt_id,
+                                     cancel=cancel, observer=observer)
+            outcome = {"completed": RunState.SUCCEEDED, "cancelled": RunState.CANCELLED,
+                       "timeout": RunState.TIMED_OUT}.get(result.status, RunState.FAILED)
+            reason = result.status
+            return result
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            outcome, reason = RunState.CANCELLED, "cancelled"
+            raise
+        finally:
+            await run_sync(self.executions.transition, run.run_id, run.version, outcome,
+                           attempt_id=attempt.attempt_id, reason=reason)
+
+    async def _arun(self, text, *, thread_id, run_id, task_id, attempt_id, cancel, observer):
+        events = Events(self.store, thread_id, run_id, observer, task_id=task_id, attempt_id=attempt_id)
         started = time.monotonic()
         cancel = cancel or Event()
-        context = RunContext(thread_id, run_id, cancel, started + self.max_seconds)
+        context = RunContext(thread_id, run_id, cancel, started + self.max_seconds,
+                             task_id=task_id, attempt_id=attempt_id)
         status, answer = "error", ""
         usage = {}
         detector = LoopDetector(self.loop_policy)
@@ -198,7 +249,7 @@ class Agent:
         finally:
             events.emit("run.end", status=status, usage=usage,
                         duration_ms=round((time.monotonic() - started) * 1000))
-        return Result(thread_id, run_id, status, answer, str(events.path))
+        return Result(thread_id, run_id, status, answer, str(events.path), task_id, attempt_id)
 
     def run(self, *args, **kwargs) -> Result:
         """CLI compatibility. Services should await arun() on a shared event loop."""

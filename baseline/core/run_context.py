@@ -13,6 +13,8 @@ class RunContext:
     tool_calls: int = 0
     uncertain_resources: set[str] = field(default_factory=set)
     completed_writes: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    task_id: str = ""
+    attempt_id: str = ""
 
     def stop_reason(self):
         if self.cancel.is_set():

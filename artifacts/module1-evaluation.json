@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "module": "execution-foundations",
+  "passed": true,
+  "rounds": 10,
+  "workers": 4,
+  "independent_worker_processes": 4,
+  "model_calls": 0,
+  "external_side_effects": 0,
+  "checks": {
+    "submission_single_winner": {
+      "passed": 10,
+      "total": 10
+    },
+    "attempt_single_winner": {
+      "passed": 10,
+      "total": 10
+    },
+    "conflicting_request_rejected": {
+      "passed": 10,
+      "total": 10
+    },
+    "stale_version_rejected": {
+      "passed": 10,
+      "total": 10
+    },
+    "pause_resume_identity_preserved": {
+      "passed": 10,
+      "total": 10
+    },
+    "new_run_operation_identity_separated": {
+      "passed": 10,
+      "total": 10
+    },
+    "crash_transaction_rolled_back": {
+      "passed": 10,
+      "total": 10
+    }
+  },
+  "total_checks": 70,
+  "round_seconds": [
+    0.5629,
+    0.4302,
+    0.3623,
+    0.361,
+    0.3667,
+    0.3673,
+    0.3661,
+    0.3661,
+    0.3833,
+    0.3837
+  ],
+  "duration_seconds": 4.0006,
+  "environment": {
+    "python": "3.12.5",
+    "platform": "Windows"
+  },
+  "limits": [
+    "No checkpoint replay",
+    "No side-effect reconciliation",
+    "No leases or worker takeover",
+    "Pause/resume evaluates repository identity, not agent continuation"
+  ]
+}
